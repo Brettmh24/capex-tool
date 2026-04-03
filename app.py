@@ -386,10 +386,10 @@ else:
                 "Replacement cost per unit ($)", min_value=0, value=8500, step=500,
                 help="Average cost to purchase and install a new unit"
             )
-            current_spend = st.number_input(
-                "Current annual maintenance spend on selected units ($)",
-                min_value=0, value=5000, step=500,
-                help="Total annual spend on maintenance/repairs for these units"
+            spend_per_unit = st.number_input(
+                "Current annual maintenance spend per unit ($)",
+                min_value=0, value=500, step=100,
+                help="Average annual maintenance/repair cost for ONE unit"
             )
             filter_cost = st.number_input(
                 "Quarterly filter cost per unit ($)", min_value=0, value=25, step=5
@@ -397,9 +397,14 @@ else:
             no_wo_years = st.slider("Work-order-free years (new units)", 1, 6, 4)
             escalation = st.slider("Annual maintenance cost escalation (%)", 0, 25, 10) / 100
 
-        if len(selected) > 0 and replacement_cost > 0 and current_spend > 0:
+        num_selected = len(selected)
+        total_current_spend = spend_per_unit * num_selected
+
+        if num_selected > 0 and replacement_cost > 0 and spend_per_unit > 0:
+            st.info(f"**{num_selected} units** x **${spend_per_unit:,.0f}/unit/yr** = **${total_current_spend:,.0f}/yr** total current maintenance spend")
+
             roi = calculate_roi(
-                selected, replacement_cost, current_spend,
+                selected, replacement_cost, total_current_spend,
                 filter_cost, no_wo_years, analysis_years=10,
                 maintenance_escalation=escalation
             )
