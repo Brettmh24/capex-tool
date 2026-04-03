@@ -12,6 +12,7 @@ import numpy as np
 from datetime import datetime
 from io import BytesIO
 from enrichment import load_and_clean, enrich_dataframe, calculate_roi, get_enrichment_summary
+from query_engine import process_query
 
 st.set_page_config(page_title="CapEx Asset Replacement Tool", page_icon="🏗️", layout="wide")
 
@@ -115,9 +116,70 @@ else:
         st.metric("Facilities", summary["facilities_count"])
 
     # --- TABS ---
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "📊 Age Buckets", "🎯 Replacement Priority", "💰 ROI Calculator", "📋 Full Data", "📥 Export"
+    tab0, tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "💬 Ask Your Data", "📊 Age Buckets", "🎯 Replacement Priority", "💰 ROI Calculator", "📋 Full Data", "📥 Export"
     ])
+
+    # ===================== TAB 0: NATURAL LANGUAGE QUERY =====================
+    with tab0:
+        st.subheader("Ask Your Data Anything")
+        st.caption("Type a question in plain English and get instant answers from your asset data.")
+
+        # Initialize chat history
+        if "chat_history" not in st.session_state:
+            st.session_state.chat_history = []
+
+        # Display chat history
+        for msg in st.session_state.chat_history:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+                if msg.get("data") is not None:
+                    st.dataframe(msg["data"], use_container_width=True, height=300)
+
+        # Query input
+        user_query = st.chat_input("e.g. How many Trane units are over 15 years old?")
+
+        if user_query:
+            # Add user message
+            st.session_state.chat_history.append({"role": "user", "content": user_query})
+            with st.chat_message("user"):
+                st.markdown(user_query)
+
+            # Process query
+            with st.chat_message("assistant"):
+                with st.spinner("Analyzing..."):
+                    result = process_query(user_query, df)
+                st.markdown(result["answer"])
+                if result["data"] is not None:
+                    st.dataframe(result["data"], use_container_width=True, height=300)
+
+            # Save assistant response
+            st.session_state.chat_history.append({
+                "role": "assistant",
+                "content": result["answer"],
+                "data": result["data"]
+            })
+
+        # Example queries
+        if not st.session_state.chat_history:
+            st.markdown("**Try asking:**")
+            example_cols = st.columns(2)
+            with example_cols[0]:
+                st.markdown("""
+                - How many assets are critical?
+                - Show me all Trane units over 15 years old
+                - What's the oldest equipment?
+                - Average age of Carrier units?
+                - Show me poor condition assets
+                """)
+            with example_cols[1]:
+                st.markdown("""
+                - How many assets by brand?
+                - Which facilities have the most assets?
+                - What's the capacity breakdown?
+                - How much to replace all critical assets?
+                - Give me a summary of everything
+                """)
 
     # ===================== TAB 1: AGE BUCKETS =====================
     with tab1:
