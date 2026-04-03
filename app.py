@@ -286,11 +286,7 @@ else:
             "replacement_score", ascending=False
         )
 
-        st.dataframe(
-            priority_df.style.background_gradient(subset=["replacement_score"], cmap="RdYlGn_r"),
-            use_container_width=True,
-            height=500
-        )
+        st.dataframe(priority_df, use_container_width=True, height=500)
 
     # ===================== TAB 3: ROI CALCULATOR =====================
     with tab3:
