@@ -13,6 +13,7 @@ from datetime import datetime
 from io import BytesIO
 from enrichment import load_and_clean, enrich_dataframe, calculate_roi, get_enrichment_summary
 from query_engine import process_query
+from xoi_client import XOiClient, enrich_with_xoi
 
 st.set_page_config(page_title="CapEx Asset Replacement Tool", page_icon="🏗️", layout="wide")
 
@@ -75,6 +76,103 @@ with st.sidebar:
         st.subheader("Date Sources")
         for source, count in summary.get("source_breakdown", {}).items():
             st.caption(f"• {source}: {count}")
+
+    st.divider()
+
+    # --- XOi Dynamic Data Integration ---
+    st.header("🔌 XOi Enrichment")
+    st.caption("Connect to XOi Dynamic Data API to enrich assets that couldn't be decoded from serial numbers.")
+
+    xoi_client_id = st.text_input("XOi Client ID", type="default", help="From your XOi API Application credentials")
+    xoi_client_secret = st.text_input("XOi Client Secret", type="password", help="Keep this secret — never share publicly")
+
+    if xoi_client_id and xoi_client_secret and st.session_state.enriched_df is not None:
+        xoi_customer_name = st.text_input("Customer Name (for XOi)", value="CapEx Tool Customer",
+                                           help="Name to register in XOi — use your company or client name")
+
+        if st.button("🚀 Run XOi Enrichment", type="primary"):
+            df = st.session_state.enriched_df
+            # Find assets still missing manufacture date
+            missing = df[df["best_mfg_year"].isna()].copy()
+
+            if len(missing) == 0:
+                st.success("All assets already have dates — no XOi enrichment needed!")
+            else:
+                st.info(f"Sending {len(missing)} undated assets to XOi for enrichment...")
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+
+                try:
+                    client = XOiClient(xoi_client_id, xoi_client_secret)
+
+                    # Create customer and site in XOi
+                    customer = client.create_customer(
+                        name=xoi_customer_name,
+                        external_id=f"capex-{xoi_customer_name.lower().replace(' ', '-')}",
+                    )
+                    site = client.create_site(
+                        customer_id=customer["id"],
+                        name="CapEx Analysis Site",
+                        external_id="capex-site-default",
+                    )
+
+                    # Prepare asset list
+                    assets_to_send = missing[["tag_id", "brand", "model_no", "serial_no", "asset_description"]].to_dict("records")
+
+                    def update_progress(current, total, message):
+                        progress_bar.progress(current / total if total > 0 else 0)
+                        status_text.text(message)
+
+                    # Send to XOi and get specs back
+                    xoi_results = enrich_with_xoi(client, customer["id"], site["id"],
+                                                   assets_to_send, progress_callback=update_progress)
+
+                    if xoi_results:
+                        # Merge XOi data back into enriched dataframe
+                        xoi_df = pd.DataFrame(xoi_results)
+
+                        for _, xoi_row in xoi_df.iterrows():
+                            tag = xoi_row.get("tag_id")
+                            mask = df["tag_id"] == tag
+
+                            # Fill age from XOi
+                            xoi_age = xoi_row.get("xoi_asset_age")
+                            if pd.notna(xoi_age) and mask.any():
+                                mfg_year = datetime.now().year - int(xoi_age)
+                                df.loc[mask & df["best_mfg_year"].isna(), "best_mfg_year"] = mfg_year
+                                df.loc[mask & df["best_mfg_year"].isna(), "mfg_date_source"] = "XOi API"
+                                df.loc[mask, "asset_age_years"] = int(xoi_age)
+
+                            # Fill capacity from XOi
+                            xoi_tons = xoi_row.get("xoi_capacity_tons")
+                            if pd.notna(xoi_tons) and mask.any():
+                                df.loc[mask & df["capacity_tons"].isna(), "capacity_tons"] = float(xoi_tons)
+
+                        # Recalculate age buckets and scores for newly enriched assets
+                        from enrichment import _assign_bucket, _calc_replacement_score, _score_to_priority
+                        df["age_bucket"] = df["asset_age_years"].apply(_assign_bucket)
+                        df["life_consumed_pct"] = (df["asset_age_years"] / df["expected_lifespan_years"] * 100).round(1)
+                        df.loc[df["life_consumed_pct"] > 200, "life_consumed_pct"] = 200
+                        df["replacement_score"] = df.apply(_calc_replacement_score, axis=1)
+                        df["replacement_priority"] = df["replacement_score"].apply(_score_to_priority)
+
+                        st.session_state.enriched_df = df
+                        new_dated = df["best_mfg_year"].notna().sum()
+                        st.success(f"✅ XOi enriched {len(xoi_results)} assets! Date coverage now: {new_dated}/{len(df)} ({new_dated/len(df)*100:.1f}%)")
+                    else:
+                        st.warning("XOi returned no spec matches. The assets may need more time to process — try again in a few minutes.")
+
+                except requests.exceptions.HTTPError as e:
+                    st.error(f"XOi API error: {e.response.status_code} — {e.response.text[:200]}")
+                except Exception as e:
+                    st.error(f"Error connecting to XOi: {str(e)}")
+
+                progress_bar.empty()
+                status_text.empty()
+    elif not xoi_client_id and st.session_state.enriched_df is not None:
+        missing_count = st.session_state.enriched_df["best_mfg_year"].isna().sum()
+        if missing_count > 0:
+            st.caption(f"⚠️ {missing_count} assets still missing dates. Add XOi credentials to enrich them.")
 
     st.divider()
     st.caption(f"📅 Today: {datetime.now().strftime('%B %d, %Y')}")
